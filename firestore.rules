@@ -1,0 +1,171 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: companies
+    // Fields:
+    //   - name: string (required)
+    //
+    // Collection: users
+    // Fields:
+    //   - name: string (required)
+    //   - email: string (required, email format)
+    //   - role: string (required, 'admin' or 'operator')
+    //   - companyId: string (required)
+    //
+    // Collection: machines
+    // Fields:
+    //   - name: string (required)
+    //   - ip: string (required)
+    //   - type: string (required)
+    //   - companyId: string (required)
+    //   - status: string (optional, 'RUNNING', 'IDLE', 'ERROR')
+    //   - lastCounter: number (optional)
+    //   - lastSeen: timestamp (optional)
+    //
+    // Collection: machines/{machineId}/logs
+    // Fields:
+    //   - machineId: string (required)
+    //   - counter: number (required)
+    //   - status: string (required)
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: machines/{machineId}/jobs
+    // Fields:
+    //   - name: string (required)
+    //   - machineId: string (required)
+    //   - status: string (required)
+    //   - startTime: timestamp (required)
+    //   - endTime: timestamp (optional)
+    //
+    // Collection: consumables
+    // Fields:
+    //   - name: string (required)
+    //   - cost: number (required)
+    //
+    // Collection: machines/{machineId}/consumables
+    // Fields:
+    //   - machineId: string (required)
+    //   - consumableId: string (required)
+    //   - name: string (required)
+    //   - level: number (required, 0-100)
+    //   - lastUpdated: timestamp (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      let path = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(path) ? get(path).data : {};
+    }
+
+    function isAdmin() {
+      let data = getUserData();
+      return isAuthenticated() &&
+        ((data.keys().contains('role') && data.role == 'admin') ||
+         (request.auth.token.email == "dispanart@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isOperator() {
+      let data = getUserData();
+      return isAuthenticated() && ((data.keys().contains('role') && data.role == 'operator') || isAdmin());
+    }
+
+    function belongsToCompany(companyId) {
+      let data = getUserData();
+      return isAuthenticated() && data.keys().contains('companyId') && data.companyId == companyId;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidIp(ip) {
+      return ip is string && ip.matches("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['name', 'email', 'role', 'companyId']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             isValidEmail(data.email) &&
+             data.role in ['admin', 'operator'] &&
+             data.companyId is string;
+    }
+
+    function isValidMachine(data) {
+      return data.keys().hasAll(['name', 'ip', 'type', 'companyId']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.ip is string && isValidIp(data.ip) &&
+             data.type is string &&
+             data.companyId is string;
+    }
+
+    function isValidLog(data) {
+      return data.keys().hasAll(['machineId', 'counter', 'status', 'createdAt']) &&
+             data.machineId is string &&
+             data.counter is number &&
+             data.status is string &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /companies/{companyId} {
+      allow read: if isAuthenticated() && belongsToCompany(companyId);
+      allow write: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) || isAdmin()) && request.resource.data.role == resource.data.role;
+    }
+
+    match /machines/{machineId} {
+      allow read: if isAuthenticated() && (isAdmin() || belongsToCompany(resource.data.companyId));
+      allow create: if isAdmin() && isValidMachine(request.resource.data);
+      allow update: if (isAdmin() || (isOperator() && belongsToCompany(resource.data.companyId))) && isValidMachine(request.resource.data);
+      
+      match /logs/{logId} {
+        allow read: if isAuthenticated() && (isAdmin() || belongsToCompany(get(/databases/$(database)/documents/machines/$(machineId)).data.companyId));
+        allow create: if isAuthenticated() && isValidLog(request.resource.data);
+      }
+
+      match /jobs/{jobId} {
+        allow read: if isAuthenticated() && (isAdmin() || belongsToCompany(get(/databases/$(database)/documents/machines/$(machineId)).data.companyId));
+        allow write: if (isAdmin() || (isOperator() && belongsToCompany(get(/databases/$(database)/documents/machines/$(machineId)).data.companyId)));
+      }
+
+      match /consumables/{mcId} {
+        allow read: if isAuthenticated() && (isAdmin() || belongsToCompany(get(/databases/$(database)/documents/machines/$(machineId)).data.companyId));
+        allow write: if (isAdmin() || (isOperator() && belongsToCompany(get(/databases/$(database)/documents/machines/$(machineId)).data.companyId)));
+      }
+    }
+
+    match /consumables/{consumableId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}

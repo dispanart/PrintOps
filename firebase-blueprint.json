@@ -1,0 +1,118 @@
+{
+  "entities": {
+    "Company": {
+      "title": "Company",
+      "description": "A company that owns printers",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "User": {
+      "title": "User",
+      "description": "App user",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["admin", "operator"] },
+        "companyId": { "type": "string" }
+      },
+      "required": ["name", "email", "role", "companyId"]
+    },
+    "Machine": {
+      "title": "Machine",
+      "description": "A printer machine",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "ip": { "type": "string", "format": "ipv4", "description": "IPv4 address of the machine" },
+        "type": { "type": "string" },
+        "companyId": { "type": "string" },
+        "status": { "type": "string", "enum": ["RUNNING", "IDLE", "ERROR"] },
+        "lastCounter": { "type": "number" },
+        "lastSeen": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "ip", "type", "companyId"]
+    },
+    "MachineLog": {
+      "title": "MachineLog",
+      "description": "Log entry for a machine",
+      "type": "object",
+      "properties": {
+        "machineId": { "type": "string" },
+        "counter": { "type": "number" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["machineId", "counter", "status", "createdAt"]
+    },
+    "Job": {
+      "title": "Job",
+      "description": "A print job",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "machineId": { "type": "string" },
+        "status": { "type": "string" },
+        "startTime": { "type": "string", "format": "date-time" },
+        "endTime": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "machineId", "status", "startTime"]
+    },
+    "Consumable": {
+      "title": "Consumable",
+      "description": "Ink or toner",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "cost": { "type": "number" }
+      },
+      "required": ["name", "cost"]
+    },
+    "MachineConsumable": {
+      "title": "MachineConsumable",
+      "description": "Current level of consumable in a machine",
+      "type": "object",
+      "properties": {
+        "machineId": { "type": "string" },
+        "consumableId": { "type": "string" },
+        "name": { "type": "string" },
+        "level": { "type": "number", "description": "Percentage 0-100" },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["machineId", "consumableId", "level", "lastUpdated"]
+    }
+  },
+  "firestore": {
+    "/companies/{companyId}": {
+      "schema": "Company",
+      "description": "Companies collection"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Users collection"
+    },
+    "/machines/{machineId}": {
+      "schema": "Machine",
+      "description": "Machines collection"
+    },
+    "/machines/{machineId}/logs/{logId}": {
+      "schema": "MachineLog",
+      "description": "Logs for a specific machine"
+    },
+    "/machines/{machineId}/jobs/{jobId}": {
+      "schema": "Job",
+      "description": "Jobs for a specific machine"
+    },
+    "/consumables/{consumableId}": {
+      "schema": "Consumable",
+      "description": "Global consumables list"
+    },
+    "/machines/{machineId}/consumables/{mcId}": {
+      "schema": "MachineConsumable",
+      "description": "Consumable levels for a specific machine"
+    }
+  }
+}

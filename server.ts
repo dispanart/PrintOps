@@ -225,10 +225,10 @@ async function startServer() {
         const isStale = (Date.now() - lastSeenDate.getTime()) > 5 * 60 * 1000;
         
         if (m.status === 'error') {
-          alerts.push({ type: 'error', message: \`\${m.name} reported an error state.\` });
+          alerts.push({ type: 'error', message: `${m.name} reported an error state.` });
         }
         if (isStale) {
-          alerts.push({ type: 'warning', message: \`\${m.name} has not reported data in over 5 minutes.\` });
+          alerts.push({ type: 'warning', message: `${m.name} has not reported data in over 5 minutes.` });
         }
 
         // Consumables
@@ -239,8 +239,8 @@ async function startServer() {
         const lowConsumables = consumables.filter(c => c.level < 20);
         if (lowConsumables.length > 0) {
           hasLowConsumable = true;
-          consumableSummary = lowConsumables.map(c => \`\${c.name} (\${c.level}%)\`).join(', ');
-          alerts.push({ type: 'warning', message: \`\${m.name} has low consumables: \${consumableSummary}\` });
+          consumableSummary = lowConsumables.map(c => `${c.name} (${c.level}%)`).join(', ');
+          alerts.push({ type: 'warning', message: `${m.name} has low consumables: ${consumableSummary}` });
         }
 
         // Format dates for frontend (Frontend expects { seconds: ... })
@@ -321,7 +321,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(\`Server running on http://localhost:\${PORT}\`);
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 

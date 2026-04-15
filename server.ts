@@ -217,7 +217,8 @@ async function startServer() {
       const machines = db.prepare('SELECT * FROM machines').all() as any[];
       const dashboardData = [];
 
-      for (const m of machines) {
+      const allAlerts: any[] = [];
+      const machinesWithAlerts = machines.map(m => {
         const alerts = [];
         
         // Check stale (SQLite CURRENT_TIMESTAMP is UTC)
@@ -225,10 +226,14 @@ async function startServer() {
         const isStale = (Date.now() - lastSeenDate.getTime()) > 5 * 60 * 1000;
         
         if (m.status === 'error') {
-          alerts.push({ type: 'error', message: `${m.name} reported an error state.` });
+          const alert = { type: 'machine_error', message: `${m.name} reported an error state.` };
+          alerts.push(alert);
+          allAlerts.push(alert);
         }
         if (isStale) {
-          alerts.push({ type: 'warning', message: `${m.name} has not reported data in over 5 minutes.` });
+          const alert = { type: 'warning', message: `${m.name} has not reported data in over 5 minutes.` };
+          alerts.push(alert);
+          allAlerts.push(alert);
         }
 
         // Consumables
@@ -240,26 +245,40 @@ async function startServer() {
         if (lowConsumables.length > 0) {
           hasLowConsumable = true;
           consumableSummary = lowConsumables.map(c => `${c.name} (${c.level}%)`).join(', ');
-          alerts.push({ type: 'warning', message: `${m.name} has low consumables: ${consumableSummary}` });
+          const alert = { type: 'warning', message: `${m.name} has low consumables: ${consumableSummary}` };
+          alerts.push(alert);
+          allAlerts.push(alert);
         }
 
         // Format dates for frontend (Frontend expects { seconds: ... })
-        m.lastSeen = { seconds: Math.floor(lastSeenDate.getTime() / 1000) };
-        m.isSC170 = m.isSC170 === 1;
+        const lastSeenSeconds = Math.floor(lastSeenDate.getTime() / 1000);
 
-        dashboardData.push({
+        return {
           ...m,
+          lastSeen: { seconds: lastSeenSeconds },
+          isSC170: m.isSC170 === 1,
           hasLowConsumable,
           consumableSummary,
           alerts
-        });
-      }
+        };
+      });
 
-      res.json(dashboardData);
+      res.json({
+        machines: machinesWithAlerts,
+        alerts: allAlerts
+      });
     } catch (error) {
       console.error('Error fetching dashboard:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
+  });
+
+  /**
+   * GET /api/production
+   * Returns production stats (mocked for now)
+   */
+  app.get('/api/production', (req, res) => {
+    res.json([]);
   });
 
   /**

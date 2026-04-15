@@ -206,6 +206,13 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'history'>('dashboard');
+  
+  // Add Machine Modal State
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [newMachineName, setNewMachineName] = useState('');
+  const [newMachineIp, setNewMachineIp] = useState('');
+  const [newMachineIsSC170, setNewMachineIsSC170] = useState(false);
+  const [isAdding, setIsAdding] = useState(false);
 
   // Polling Logic
   useEffect(() => {
@@ -276,10 +283,153 @@ export default function App() {
     </div>
   );
 
+  const handleAddMachine = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMachineName || !newMachineIp) return;
+    
+    // IP Validation
+    const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+    if (!ipRegex.test(newMachineIp)) {
+      alert('Please enter a valid IPv4 address (e.g., 192.168.1.50)');
+      return;
+    }
+
+    setIsAdding(true);
+    try {
+      const res = await fetch('/api/machines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newMachineName,
+          ip: newMachineIp,
+          isSC170: newMachineIsSC170
+        })
+      });
+      
+      if (res.ok) {
+        setIsAddModalOpen(false);
+        setNewMachineName('');
+        setNewMachineIp('');
+        setNewMachineIsSC170(false);
+        // The polling will automatically pick up the new machine
+      } else {
+        alert('Failed to add machine');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Error adding machine');
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const handleDeleteMachine = async () => {
+    if (!selectedId) return;
+    if (!confirm('Are you sure you want to delete this machine? This will also delete all its history and logs.')) return;
+
+    try {
+      const res = await fetch(`/api/machines/${selectedId}`, { method: 'DELETE' });
+      if (res.ok) {
+        setSelectedId(null);
+        setDetail(null);
+      } else {
+        alert('Failed to delete machine');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Error deleting machine');
+    }
+  };
+
   const selectedMachine = machines?.find(m => m.id === selectedId);
 
   return (
     <div className="min-h-screen bg-[#0F1115] text-slate-200 selection:bg-sky-500/30">
+      {/* Add Machine Modal */}
+      <AnimatePresence>
+        {isAddModalOpen && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-[#151921] border border-slate-800 rounded-3xl p-8 w-full max-w-md shadow-2xl"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-bold text-white">Add New Machine</h2>
+                <button onClick={() => setIsAddModalOpen(false)} className="text-slate-500 hover:text-white">
+                  <XCircle className="w-6 h-6" />
+                </button>
+              </div>
+              
+              <form onSubmit={handleAddMachine} className="space-y-5">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Machine Name</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={newMachineName}
+                    onChange={e => setNewMachineName(e.target.value)}
+                    placeholder="e.g. Revoria SC170"
+                    className="w-full bg-[#0F1115] border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">IP Address</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={newMachineIp}
+                    onChange={e => setNewMachineIp(e.target.value)}
+                    placeholder="e.g. 192.168.1.201"
+                    className="w-full bg-[#0F1115] border border-slate-800 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all"
+                  />
+                  <p className="text-[10px] text-slate-500">Must be accessible by the Local Agent on your LAN.</p>
+                </div>
+
+                <div className="flex items-center gap-3 pt-2">
+                  <input 
+                    type="checkbox" 
+                    id="isSC170"
+                    checked={newMachineIsSC170}
+                    onChange={e => setNewMachineIsSC170(e.target.checked)}
+                    className="w-5 h-5 rounded border-slate-800 bg-[#0F1115] text-sky-500 focus:ring-sky-500 focus:ring-offset-[#151921]"
+                  />
+                  <label htmlFor="isSC170" className="text-sm font-medium text-slate-300">
+                    This is a Revoria SC170 (Enable Job Queue monitoring)
+                  </label>
+                </div>
+
+                <div className="pt-6 flex gap-3">
+                  <button 
+                    type="button"
+                    onClick={() => setIsAddModalOpen(false)}
+                    className="flex-1 py-3 px-4 rounded-xl font-bold text-slate-400 hover:text-white hover:bg-slate-800 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={isAdding}
+                    className="flex-1 py-3 px-4 bg-sky-500 hover:bg-sky-400 text-white rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {isAdding ? (
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <Plus className="w-5 h-5" />
+                        Add Machine
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Sidebar Navigation */}
       <aside className="fixed left-0 top-0 bottom-0 w-20 lg:w-64 bg-[#151921] border-r border-slate-800/50 z-50 flex flex-col">
         <div className="p-6 flex items-center gap-3 border-b border-slate-800/50">
@@ -416,17 +566,34 @@ export default function App() {
                 <div className="xl:col-span-4 space-y-4">
                   <div className="flex items-center justify-between mb-6">
                     <h2 className="font-bold text-slate-400 uppercase tracking-widest text-xs">Fleet List</h2>
-                    <button className="text-[10px] font-bold text-sky-500 hover:text-sky-400 uppercase tracking-widest transition-colors">View All</button>
+                    <button 
+                      onClick={() => setIsAddModalOpen(true)}
+                      className="text-[10px] font-bold text-sky-500 hover:text-sky-400 uppercase tracking-widest transition-colors flex items-center gap-1"
+                    >
+                      <Plus className="w-3 h-3" /> Add Machine
+                    </button>
                   </div>
                   <div className="space-y-3">
-                    {machines?.map(m => (
-                      <MachineCard 
-                        key={m.id} 
-                        machine={m} 
-                        onClick={() => setSelectedId(m.id)}
-                        isActive={selectedId === m.id}
-                      />
-                    ))}
+                    {machines?.length === 0 ? (
+                      <div className="p-6 text-center border border-dashed border-slate-800 rounded-2xl">
+                        <p className="text-sm text-slate-500 mb-3">No machines configured.</p>
+                        <button 
+                          onClick={() => setIsAddModalOpen(true)}
+                          className="px-4 py-2 bg-sky-500/10 text-sky-500 rounded-xl text-xs font-bold hover:bg-sky-500/20 transition-colors"
+                        >
+                          Add your first machine
+                        </button>
+                      </div>
+                    ) : (
+                      machines?.map(m => (
+                        <MachineCard 
+                          key={m.id} 
+                          machine={m} 
+                          onClick={() => setSelectedId(m.id)}
+                          isActive={selectedId === m.id}
+                        />
+                      ))
+                    )}
                   </div>
                 </div>
 
@@ -434,6 +601,31 @@ export default function App() {
                 <div className="xl:col-span-8 space-y-8">
                   {detail && selectedMachine ? (
                     <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+                      {/* Detail Header */}
+                      <div className="flex items-center justify-between bg-[#151921] p-6 rounded-3xl border border-slate-800/50">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-gradient-to-br from-sky-500/20 to-indigo-500/20 rounded-xl flex items-center justify-center border border-sky-500/20">
+                            <Printer className="w-6 h-6 text-sky-500" />
+                          </div>
+                          <div>
+                            <h2 className="text-xl font-bold text-white">{selectedMachine.name}</h2>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-xs text-slate-400 font-mono">{selectedMachine.ip}</span>
+                              <span className="w-1 h-1 rounded-full bg-slate-700" />
+                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                                {selectedMachine.isSC170 ? 'Revoria SC170' : 'Standard Printer'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={handleDeleteMachine}
+                          className="px-4 py-2 bg-rose-500/10 text-rose-500 hover:bg-rose-500/20 rounded-xl text-xs font-bold transition-colors flex items-center gap-2"
+                        >
+                          <XCircle className="w-4 h-4" /> Delete
+                        </button>
+                      </div>
+
                       {/* Stats Row */}
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <div className="bg-[#151921] p-6 rounded-3xl border border-slate-800/50 space-y-2">
@@ -579,70 +771,52 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <div className="lg:col-span-2 bg-[#151921] rounded-3xl border border-slate-800/50 overflow-hidden">
-                  <div className="p-6 border-b border-slate-800/50">
-                    <h3 className="font-bold text-white">Historical Status & Counter Logs</h3>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="text-[10px] font-bold text-slate-500 uppercase tracking-widest border-b border-slate-800/50">
-                          <th className="px-6 py-4">Date & Time</th>
-                          <th className="px-6 py-4">Status</th>
-                          <th className="px-6 py-4">Counter</th>
-                          <th className="px-6 py-4">Production</th>
-                        </tr>
-                      </thead>
-                      <tbody className="text-sm">
-                        {detail?.logs?.map((log: any, i: number) => {
-                          const prevLog = detail.logs[i + 1];
-                          const diff = prevLog ? log.counter - prevLog.counter : 0;
-                          return (
-                            <tr key={i} className="border-b border-slate-800/30 hover:bg-slate-800/20 transition-colors">
-                              <td className="px-6 py-4 text-slate-400 font-mono text-xs">
-                                {format(new Date(log.createdAt?.seconds * 1000 || Date.now()), 'MMM d, yyyy HH:mm:ss')}
-                              </td>
-                              <td className="px-6 py-4">
-                                <StatusBadge status={log.status} />
-                              </td>
-                              <td className="px-6 py-4 font-bold text-white">{log.counter.toLocaleString()}</td>
-                              <td className="px-6 py-4">
-                                <span className={cn(
-                                  "text-xs font-bold",
-                                  diff > 0 ? "text-emerald-500" : "text-slate-500"
-                                )}>
-                                  {diff > 0 ? `+${diff}` : '-'}
-                                </span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="space-y-8">
-                  <div className="bg-[#151921] rounded-3xl border border-slate-800/50 p-6">
-                    <h3 className="font-bold text-white mb-6">Historical Consumables</h3>
-                    <div className="space-y-6">
-                      {detail?.consumables?.map((c: any, i: number) => (
-                        <div key={i} className="space-y-2">
-                          <div className="flex justify-between items-center">
-                            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">{c.name}</span>
-                            <span className="text-xs font-mono text-white">{c.level}%</span>
-                          </div>
-                          <div className="text-[10px] text-slate-500">
-                            Last updated: {format(new Date(c.lastUpdated?.seconds * 1000 || Date.now()), 'HH:mm:ss')}
-                          </div>
-                          <ConsumableBar name={c.name} level={c.level} />
-                        </div>
-                      ))}
+              <div className="space-y-8">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                  <div className="lg:col-span-2 bg-[#151921] rounded-3xl border border-slate-800/50 overflow-hidden flex flex-col">
+                    <div className="p-6 border-b border-slate-800/50">
+                      <h3 className="font-bold text-white">Historical Status & Counter Logs</h3>
+                    </div>
+                    <div className="overflow-x-auto flex-1 max-h-[400px] overflow-y-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead className="sticky top-0 bg-[#151921] z-10">
+                          <tr className="text-[10px] font-bold text-slate-500 uppercase tracking-widest border-b border-slate-800/50">
+                            <th className="px-6 py-4">Date & Time</th>
+                            <th className="px-6 py-4">Status</th>
+                            <th className="px-6 py-4">Counter</th>
+                            <th className="px-6 py-4">Production</th>
+                          </tr>
+                        </thead>
+                        <tbody className="text-sm">
+                          {detail?.logs?.map((log: any, i: number) => {
+                            const prevLog = detail.logs[i + 1];
+                            const diff = prevLog ? log.counter - prevLog.counter : 0;
+                            return (
+                              <tr key={i} className="border-b border-slate-800/30 hover:bg-slate-800/20 transition-colors">
+                                <td className="px-6 py-4 text-slate-400 font-mono text-xs">
+                                  {format(new Date(log.createdAt?.seconds * 1000 || Date.now()), 'MMM d, yyyy HH:mm:ss')}
+                                </td>
+                                <td className="px-6 py-4">
+                                  <StatusBadge status={log.status} />
+                                </td>
+                                <td className="px-6 py-4 font-bold text-white">{log.counter.toLocaleString()}</td>
+                                <td className="px-6 py-4">
+                                  <span className={cn(
+                                    "text-xs font-bold",
+                                    diff > 0 ? "text-emerald-500" : "text-slate-500"
+                                  )}>
+                                    {diff > 0 ? `+${diff}` : '-'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
-                  
-                  <div className="bg-sky-500/5 border border-sky-500/20 rounded-3xl p-6">
+
+                  <div className="bg-sky-500/5 border border-sky-500/20 rounded-3xl p-6 h-fit">
                     <div className="flex items-center gap-3 mb-4">
                       <TrendingUp className="w-5 h-5 text-sky-500" />
                       <h3 className="font-bold text-sky-500 uppercase tracking-widest text-xs">Production Summary</h3>
@@ -656,6 +830,98 @@ export default function App() {
                         <span className="text-xs text-slate-400">Avg. Daily Production</span>
                         <span className="text-sm font-bold text-emerald-500">~1,240</span>
                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  {/* Job History */}
+                  <div className="bg-[#151921] rounded-3xl border border-slate-800/50 overflow-hidden flex flex-col">
+                    <div className="p-6 border-b border-slate-800/50 flex items-center justify-between">
+                      <h3 className="font-bold text-white">Job History</h3>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{detail?.jobs?.length || 0} Records</span>
+                    </div>
+                    <div className="overflow-x-auto flex-1 max-h-[400px] overflow-y-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead className="sticky top-0 bg-[#151921] z-10">
+                          <tr className="text-[10px] font-bold text-slate-500 uppercase tracking-widest border-b border-slate-800/50">
+                            <th className="px-6 py-4">Date & Time</th>
+                            <th className="px-6 py-4">Job Name</th>
+                            <th className="px-6 py-4">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="text-sm">
+                          {detail?.jobs?.length > 0 ? detail.jobs.map((job: any, i: number) => (
+                            <tr key={i} className="border-b border-slate-800/30 hover:bg-slate-800/20 transition-colors">
+                              <td className="px-6 py-4 text-slate-400 font-mono text-xs">
+                                {format(new Date(job.createdAt?.seconds * 1000 || Date.now()), 'MMM d, HH:mm:ss')}
+                              </td>
+                              <td className="px-6 py-4 font-bold text-white">{job.name}</td>
+                              <td className="px-6 py-4">
+                                <span className={cn(
+                                  "px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-widest",
+                                  job.status === 'printing' ? "bg-sky-500/10 text-sky-500 border-sky-500/20" : 
+                                  job.status === 'error' ? "bg-rose-500/10 text-rose-500 border-rose-500/20" :
+                                  "bg-slate-500/10 text-slate-500 border-slate-500/20"
+                                )}>
+                                  {job.status}
+                                </span>
+                              </td>
+                            </tr>
+                          )) : (
+                            <tr>
+                              <td colSpan={3} className="px-6 py-8 text-center text-slate-500 text-xs">No job history available for this machine.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Consumable History */}
+                  <div className="bg-[#151921] rounded-3xl border border-slate-800/50 overflow-hidden flex flex-col">
+                    <div className="p-6 border-b border-slate-800/50 flex items-center justify-between">
+                      <h3 className="font-bold text-white">Consumable History</h3>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{detail?.consumableLogs?.length || 0} Records</span>
+                    </div>
+                    <div className="overflow-x-auto flex-1 max-h-[400px] overflow-y-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead className="sticky top-0 bg-[#151921] z-10">
+                          <tr className="text-[10px] font-bold text-slate-500 uppercase tracking-widest border-b border-slate-800/50">
+                            <th className="px-6 py-4">Date & Time</th>
+                            <th className="px-6 py-4">Consumable</th>
+                            <th className="px-6 py-4">Level</th>
+                          </tr>
+                        </thead>
+                        <tbody className="text-sm">
+                          {detail?.consumableLogs?.length > 0 ? detail.consumableLogs.map((log: any, i: number) => (
+                            <tr key={i} className="border-b border-slate-800/30 hover:bg-slate-800/20 transition-colors">
+                              <td className="px-6 py-4 text-slate-400 font-mono text-xs">
+                                {format(new Date(log.createdAt?.seconds * 1000 || Date.now()), 'MMM d, HH:mm:ss')}
+                              </td>
+                              <td className="px-6 py-4 font-bold text-white">{log.name}</td>
+                              <td className="px-6 py-4">
+                                <div className="flex items-center gap-3">
+                                  <span className={cn(
+                                    "font-mono text-xs font-bold",
+                                    log.level < 20 ? "text-rose-500" : "text-sky-500"
+                                  )}>{log.level}%</span>
+                                  <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                    <div 
+                                      className={cn("h-full", log.level < 20 ? "bg-rose-500" : "bg-sky-500")}
+                                      style={{ width: `${log.level}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )) : (
+                            <tr>
+                              <td colSpan={3} className="px-6 py-8 text-center text-slate-500 text-xs">No consumable history available.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 </div>

@@ -18,12 +18,21 @@ interface PrinterConfig {
   isSC170: boolean;
 }
 
-// Real Machines Configuration
-const PRINTERS: PrinterConfig[] = [
-  { id: 'sc170-01', name: 'Revoria SC170', ip: '192.168.1.201', isSC170: true },
-  { id: 'kasir-01', name: 'ApeosPort Kasir', ip: '192.168.1.49', isSC170: false },
-  { id: 'sewa-01', name: 'ApeosPort Sewa', ip: '192.168.1.50', isSC170: false }
-];
+// Real Machines Configuration (Now fetched dynamically from backend)
+// const PRINTERS: PrinterConfig[] = [ ... ];
+
+/**
+ * Fetch printers from backend
+ */
+async function getPrinters(): Promise<PrinterConfig[]> {
+  try {
+    const res = await axios.get(`${BACKEND_URL}/api/machines`, { timeout: 5000 });
+    return res.data;
+  } catch (e) {
+    console.error(`[Agent] Failed to fetch printer list from backend: ${e.message}`);
+    return [];
+  }
+}
 
 /**
  * Scrape data from a single printer
@@ -107,7 +116,13 @@ async function runAgent() {
   console.log(`Target Backend: ${BACKEND_URL}`);
   
   setInterval(async () => {
-    for (const printer of PRINTERS) {
+    const printers = await getPrinters();
+    if (printers.length === 0) {
+      console.log(`[${new Date().toLocaleTimeString()}] No printers configured or backend unreachable.`);
+      return;
+    }
+
+    for (const printer of printers) {
       await scrapePrinter(printer);
     }
   }, POLLING_INTERVAL);

@@ -3,33 +3,65 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
-import { initializeApp } from 'firebase/app';
-import { 
-  getFirestore, 
-  doc, 
-  getDoc, 
-  updateDoc, 
-  addDoc, 
-  collection, 
-  serverTimestamp, 
-  setDoc, 
-  query, 
-  where, 
-  getDocs, 
-  orderBy, 
-  limit,
-  Timestamp,
-  startAt,
-  endAt
-} from 'firebase/firestore';
-import firebaseConfig from './firebase-applet-config.json' assert { type: 'json' };
+import Database from 'better-sqlite3';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Initialize Firebase
-const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+// Initialize SQLite Database
+const db = new Database('printops.db');
+
+// Initialize Schema
+db.exec(`
+  CREATE TABLE IF NOT EXISTS machines (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    isSC170 INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'idle',
+    lastCounter INTEGER DEFAULT 0,
+    lastSeen DATETIME DEFAULT CURRENT_TIMESTAMP,
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    machineId TEXT NOT NULL,
+    counter INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (machineId) REFERENCES machines(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS consumables (
+    machineId TEXT NOT NULL,
+    consumableId TEXT NOT NULL,
+    name TEXT NOT NULL,
+    level INTEGER NOT NULL,
+    lastUpdated DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (machineId, consumableId),
+    FOREIGN KEY (machineId) REFERENCES machines(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS consumable_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    machineId TEXT NOT NULL,
+    consumableId TEXT NOT NULL,
+    name TEXT NOT NULL,
+    level INTEGER NOT NULL,
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (machineId) REFERENCES machines(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    machineId TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (machineId) REFERENCES machines(id)
+  );
+`);
 
 async function startServer() {
   const app = express();
@@ -44,77 +76,135 @@ async function startServer() {
    * POST /api/machine-log
    * Receives data from the Local Agent
    */
-  app.post('/api/machine-log', async (req, res) => {
+  app.post('/api/machine-log', (req, res) => {
     const { machineId, counter, status: reportedStatus, consumables, jobs } = req.body;
 
     if (!machineId) return res.status(400).json({ error: 'machineId is required' });
 
     try {
-      const machineRef = doc(db, 'machines', machineId);
-      const machineSnap = await getDoc(machineRef);
+      // 1. Get current machine
+      const machine = db.prepare('SELECT * FROM machines WHERE id = ?').get(machineId) as any;
+      if (!machine) return res.status(404).json({ error: 'Machine not found' });
 
-      if (!machineSnap.exists()) return res.status(404).json({ error: 'Machine not found' });
-
-      const machineData = machineSnap.data();
-      const lastCounter = machineData.lastCounter || 0;
-      const lastSeen = machineData.lastSeen?.toDate() || new Date(0);
-      const now = new Date();
-
-      // Logic: Determine status
       let finalStatus = reportedStatus || 'idle';
-      if (counter > lastCounter) {
+      
+      // Determine status based on counter
+      if (counter > machine.lastCounter) {
         finalStatus = 'running';
-      } else {
-        const diffSeconds = (now.getTime() - lastSeen.getTime()) / 1000;
-        if (diffSeconds > 60) finalStatus = 'idle';
-        else finalStatus = machineData.status || 'running';
+      } else if (finalStatus !== 'error') {
+        finalStatus = 'idle';
       }
 
-      // 1. Update Machine Master
-      await updateDoc(machineRef, {
-        status: finalStatus,
-        lastCounter: counter,
-        lastSeen: serverTimestamp()
-      });
+      // 2. Update Machine
+      db.prepare(`
+        UPDATE machines 
+        SET status = ?, lastCounter = ?, lastSeen = CURRENT_TIMESTAMP 
+        WHERE id = ?
+      `).run(finalStatus, counter, machineId);
 
-      // 2. Store Machine Log
-      await addDoc(collection(db, 'machines', machineId, 'logs'), {
-        machineId,
-        counter,
-        status: finalStatus,
-        createdAt: serverTimestamp()
-      });
+      // Log status change if needed
+      if (machine.status !== finalStatus || counter !== machine.lastCounter) {
+        db.prepare(`
+          INSERT INTO logs (machineId, counter, status) 
+          VALUES (?, ?, ?)
+        `).run(machineId, counter, finalStatus);
+      }
 
       // 3. Update Consumables
       if (consumables && Array.isArray(consumables)) {
         for (const c of consumables) {
           const cId = c.name.toLowerCase().replace(/\s+/g, '-');
-          const mcRef = doc(db, 'machines', machineId, 'consumables', cId);
-          await setDoc(mcRef, {
-            machineId,
-            consumableId: cId,
-            name: c.name,
-            level: c.level,
-            lastUpdated: serverTimestamp()
-          }, { merge: true });
+          
+          const currentC = db.prepare('SELECT level FROM consumables WHERE machineId = ? AND consumableId = ?').get(machineId, cId) as any;
+          
+          let logNeeded = true;
+          if (currentC && currentC.level === c.level) {
+            logNeeded = false;
+          }
+
+          db.prepare(`
+            INSERT INTO consumables (machineId, consumableId, name, level, lastUpdated)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(machineId, consumableId) DO UPDATE SET
+              level = excluded.level,
+              lastUpdated = CURRENT_TIMESTAMP
+          `).run(machineId, cId, c.name, c.level);
+
+          if (logNeeded) {
+            db.prepare(`
+              INSERT INTO consumable_logs (machineId, consumableId, name, level)
+              VALUES (?, ?, ?, ?)
+            `).run(machineId, cId, c.name, c.level);
+          }
         }
       }
 
-      // 4. Store Jobs (SC170 only logic usually handled by agent filtering)
+      // 4. Update Jobs (for SC170)
       if (jobs && Array.isArray(jobs)) {
         for (const job of jobs) {
-          await addDoc(collection(db, 'machines', machineId, 'jobs'), {
-            name: job.name,
-            status: job.status,
-            createdAt: serverTimestamp()
-          });
+          db.prepare(`
+            INSERT INTO jobs (machineId, name, status)
+            VALUES (?, ?, ?)
+          `).run(machineId, job.name, job.status);
         }
       }
 
-      res.json({ success: true, status: finalStatus });
+      res.json({ success: true });
     } catch (error) {
-      console.error('Backend Error:', error);
+      console.error('Error processing machine log:', error);
       res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * GET /api/machines
+   * Returns all machines (used by Agent to know what to monitor)
+   */
+  app.get('/api/machines', (req, res) => {
+    try {
+      const machines = db.prepare('SELECT * FROM machines').all();
+      res.json(machines);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch machines' });
+    }
+  });
+
+  /**
+   * POST /api/machines
+   * Add a new machine from the dashboard
+   */
+  app.post('/api/machines', (req, res) => {
+    const { name, ip, isSC170 } = req.body;
+    if (!name || !ip) return res.status(400).json({ error: 'Name and IP are required' });
+
+    try {
+      const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Math.random().toString(36).substring(2, 6);
+      db.prepare(`
+        INSERT INTO machines (id, name, ip, isSC170, status, lastCounter)
+        VALUES (?, ?, ?, ?, 'idle', 0)
+      `).run(id, name, ip, isSC170 ? 1 : 0);
+      
+      res.json({ success: true, id });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to add machine' });
+    }
+  });
+
+  /**
+   * DELETE /api/machines/:id
+   * Delete a machine
+   */
+  app.delete('/api/machines/:id', (req, res) => {
+    const { id } = req.params;
+    try {
+      db.prepare('DELETE FROM jobs WHERE machineId = ?').run(id);
+      db.prepare('DELETE FROM consumable_logs WHERE machineId = ?').run(id);
+      db.prepare('DELETE FROM consumables WHERE machineId = ?').run(id);
+      db.prepare('DELETE FROM logs WHERE machineId = ?').run(id);
+      db.prepare('DELETE FROM machines WHERE id = ?').run(id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to delete machine' });
     }
   });
 
@@ -122,105 +212,100 @@ async function startServer() {
    * GET /api/dashboard
    * Returns all machines with current status and alerts
    */
-  app.get('/api/dashboard', async (req, res) => {
+  app.get('/api/dashboard', (req, res) => {
     try {
-      const q = query(collection(db, 'machines'));
-      const snapshot = await getDocs(q);
-      const machines = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      
-      // Basic alert detection
-      const alerts = [];
-      const machinesWithConsumables = [];
+      const machines = db.prepare('SELECT * FROM machines').all() as any[];
+      const dashboardData = [];
 
-      for (const m of machines as any[]) {
-        if (m.status === 'error') {
-          alerts.push({ machineId: m.id, type: 'machine_error', message: `${m.name} is reporting an error.` });
-        }
+      for (const m of machines) {
+        const alerts = [];
         
-        // Check consumables for this machine
-        const consSnap = await getDocs(collection(db, 'machines', m.id, 'consumables'));
-        const machineConsumables = consSnap.docs.map(d => d.data());
-        const hasLowConsumable = machineConsumables.some(c => c.level < 20);
-
-        if (hasLowConsumable) {
-          machineConsumables.filter(c => c.level < 20).forEach(c => {
-            alerts.push({ machineId: m.id, type: 'low_toner', message: `${m.name}: ${c.name} is low (${c.level}%)` });
-          });
+        // Check stale (SQLite CURRENT_TIMESTAMP is UTC)
+        const lastSeenDate = new Date(m.lastSeen + 'Z'); 
+        const isStale = (Date.now() - lastSeenDate.getTime()) > 5 * 60 * 1000;
+        
+        if (m.status === 'error') {
+          alerts.push({ type: 'error', message: \`\${m.name} reported an error state.\` });
+        }
+        if (isStale) {
+          alerts.push({ type: 'warning', message: \`\${m.name} has not reported data in over 5 minutes.\` });
         }
 
-        machinesWithConsumables.push({
+        // Consumables
+        const consumables = db.prepare('SELECT * FROM consumables WHERE machineId = ?').all(m.id) as any[];
+        let hasLowConsumable = false;
+        let consumableSummary = '';
+
+        const lowConsumables = consumables.filter(c => c.level < 20);
+        if (lowConsumables.length > 0) {
+          hasLowConsumable = true;
+          consumableSummary = lowConsumables.map(c => \`\${c.name} (\${c.level}%)\`).join(', ');
+          alerts.push({ type: 'warning', message: \`\${m.name} has low consumables: \${consumableSummary}\` });
+        }
+
+        // Format dates for frontend (Frontend expects { seconds: ... })
+        m.lastSeen = { seconds: Math.floor(lastSeenDate.getTime() / 1000) };
+        m.isSC170 = m.isSC170 === 1;
+
+        dashboardData.push({
           ...m,
           hasLowConsumable,
-          consumableSummary: machineConsumables.map(c => ({ name: c.name, level: c.level }))
+          consumableSummary,
+          alerts
         });
       }
 
-      res.json({ machines: machinesWithConsumables, alerts });
+      res.json(dashboardData);
     } catch (error) {
-      res.status(500).json({ error: 'Failed to fetch dashboard' });
+      console.error('Error fetching dashboard:', error);
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
   /**
    * GET /api/machine/:id
-   * Detailed machine data
+   * Returns detailed data for a specific machine
    */
-  app.get('/api/machine/:id', async (req, res) => {
+  app.get('/api/machine/:id', (req, res) => {
     const { id } = req.params;
-    try {
-      const mRef = doc(db, 'machines', id);
-      const mSnap = await getDoc(mRef);
-      if (!mSnap.exists()) return res.status(404).json({ error: 'Not found' });
 
-      const consumables = await getDocs(collection(db, 'machines', id, 'consumables'));
-      const logs = await getDocs(query(collection(db, 'machines', id, 'logs'), orderBy('createdAt', 'desc'), limit(50)));
-      const jobs = await getDocs(query(collection(db, 'machines', id, 'jobs'), orderBy('createdAt', 'desc'), limit(20)));
+    try {
+      const machine = db.prepare('SELECT * FROM machines WHERE id = ?').get(id) as any;
+      if (!machine) return res.status(404).json({ error: 'Not found' });
+
+      machine.lastSeen = { seconds: Math.floor(new Date(machine.lastSeen + 'Z').getTime() / 1000) };
+      machine.isSC170 = machine.isSC170 === 1;
+
+      const consumables = db.prepare('SELECT * FROM consumables WHERE machineId = ?').all(id).map((c: any) => ({
+        ...c, lastUpdated: { seconds: Math.floor(new Date(c.lastUpdated + 'Z').getTime() / 1000) }
+      }));
+      
+      const consumableLogs = db.prepare('SELECT * FROM consumable_logs WHERE machineId = ? ORDER BY createdAt DESC LIMIT 50').all(id).map((l: any) => ({
+        ...l, createdAt: { seconds: Math.floor(new Date(l.createdAt + 'Z').getTime() / 1000) }
+      }));
+      
+      const logs = db.prepare('SELECT * FROM logs WHERE machineId = ? ORDER BY createdAt DESC LIMIT 50').all(id).map((l: any) => ({
+        ...l, createdAt: { seconds: Math.floor(new Date(l.createdAt + 'Z').getTime() / 1000) }
+      }));
+      
+      const jobs = db.prepare('SELECT * FROM jobs WHERE machineId = ? ORDER BY createdAt DESC LIMIT 50').all(id).map((j: any) => ({
+        ...j, createdAt: { seconds: Math.floor(new Date(j.createdAt + 'Z').getTime() / 1000) }
+      }));
 
       res.json({
-        machine: { id: mSnap.id, ...mSnap.data() },
-        consumables: consumables.docs.map(d => d.data()),
-        logs: logs.docs.map(d => d.data()),
-        jobs: jobs.docs.map(d => d.data())
+        machine,
+        consumables,
+        consumableLogs,
+        logs,
+        jobs
       });
     } catch (error) {
-      res.status(500).json({ error: 'Failed to fetch machine detail' });
+      console.error('Error fetching machine details:', error);
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
-  /**
-   * GET /api/production
-   * Production per day = max(counter) - min(counter)
-   */
-  app.get('/api/production', async (req, res) => {
-    try {
-      const machinesSnap = await getDocs(collection(db, 'machines'));
-      const productionData: any[] = [];
-
-      for (const m of machinesSnap.docs) {
-        const logsQ = query(
-          collection(db, 'machines', m.id, 'logs'),
-          orderBy('createdAt', 'asc')
-        );
-        const logsSnap = await getDocs(logsQ);
-        const logs = logsSnap.docs.map(d => d.data());
-
-        if (logs.length > 1) {
-          const first = logs[0].counter;
-          const last = logs[logs.length - 1].counter;
-          productionData.push({
-            machineId: m.id,
-            machineName: m.get('name'),
-            totalProduction: last - first
-          });
-        }
-      }
-      res.json(productionData);
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to calculate production' });
-    }
-  });
-
-  // Vite setup
+  // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -236,7 +321,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`PrintOps Backend running on port ${PORT}`);
+    console.log(\`Server running on http://localhost:\${PORT}\`);
   });
 }
 
